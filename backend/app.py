@@ -52,7 +52,7 @@ def extract_parameters_with_openai(query):
                     "properties": {
                         "service": {
                             "type": "string",
-                            "description": "AWS服務類型，如EC2、S3、RDS等"
+                            "description": "AWS服務類型，如EC2、S3、RDS、Lambda、DynamoDB等"
                         },
                         "region": {
                             "type": "string",
@@ -60,11 +60,23 @@ def extract_parameters_with_openai(query):
                         },
                         "instance_type": {
                             "type": "string",
-                            "description": "實例類型，如t2.micro、m5.large等"
+                            "description": "EC2或RDS實例類型，如t2.micro、m5.large等"
                         },
                         "os": {
                             "type": "string",
-                            "description": "操作系統，如Linux、Windows等"
+                            "description": "EC2操作系統，如Linux、Windows等"
+                        },
+                        "storage_class": {
+                            "type": "string",
+                            "description": "S3儲存類型，如Standard(標準)、Intelligent-Tiering(智能分層)、Glacier(冷藏)等"
+                        },
+                        "storage_size": {
+                            "type": "string",
+                            "description": "儲存大小，如100GB、1TB等"
+                        },
+                        "db_engine": {
+                            "type": "string",
+                            "description": "RDS數據庫引擎，如MySQL、PostgreSQL、Oracle、SQL Server等"
                         }
                     },
                     "required": ["service"]
@@ -89,169 +101,503 @@ def query_aws_price(params):
 
     try:
         client = create_aws_client()
+        service = params.get('service', '').lower()
 
-        # 目前僅實現EC2價格查詢，可以根據需要擴展到其他服務
-        if params.get('service', '').lower() == 'ec2':
-            filters = []
+        # 獲取區域代碼和名稱
+        region_code = None
+        region_name = None
+        if 'region' in params:
+            # 處理區域參數
+            if params['region'].lower() == '東京' or '東京' in params['region'].lower():
+                region_code = 'ap-northeast-1'
+            else:
+                region_code = params['region']
 
-            # 添加實例類型過濾器
-            if 'instance_type' in params:
-                filters.append({
-                    'Type': 'TERM_MATCH',
-                    'Field': 'instanceType',
-                    'Value': params['instance_type']
-                })
+            # 區域代碼到AWS Price List API位置名稱的映射
+            region_mapping = {
+                'us-east-1': 'US East (N. Virginia)',
+                'us-east-2': 'US East (Ohio)',
+                'us-west-1': 'US West (N. California)',
+                'us-west-2': 'US West (Oregon)',
+                'ap-east-1': 'Asia Pacific (Hong Kong)',
+                'ap-south-1': 'Asia Pacific (Mumbai)',
+                'ap-northeast-1': 'Asia Pacific (Tokyo)',
+                'ap-northeast-2': 'Asia Pacific (Seoul)',
+                'ap-northeast-3': 'Asia Pacific (Osaka)',
+                'ap-southeast-1': 'Asia Pacific (Singapore)',
+                'ap-southeast-2': 'Asia Pacific (Sydney)',
+                'ca-central-1': 'Canada (Central)',
+                'eu-central-1': 'EU (Frankfurt)',
+                'eu-west-1': 'EU (Ireland)',
+                'eu-west-2': 'EU (London)',
+                'eu-west-3': 'EU (Paris)',
+                'eu-north-1': 'EU (Stockholm)',
+                'sa-east-1': 'South America (Sao Paulo)',
+            }
+            region_name = region_mapping.get(region_code, region_code)
+            logger.info(f"處理區域: 代碼={region_code}, 名稱={region_name}")
 
-            # 添加區域過濾器
-            if 'region' in params:
-                # 如果是東京，轉換為對應的區域代碼
-                if params['region'].lower() == '東京' or '東京' in params['region'].lower():
-                    region_code = 'ap-northeast-1'
-                else:
-                    region_code = params['region']
-
-                # 轉換區域代碼為AWS Price List API使用的位置名稱
-                region_mapping = {
-                    'ap-northeast-1': 'Asia Pacific (Tokyo)',
-                }
-                region_name = region_mapping.get(region_code, region_code)
-
-                filters.append({
-                    'Type': 'TERM_MATCH',
-                    'Field': 'location',
-                    'Value': region_name
-                })
-                logger.info(f"使用區域過濾器: {region_name}")
-
-            # 添加操作系統過濾器
-            if 'os' in params:
-                os_value = params['os'].lower()
-                if 'linux' in os_value:
-                    os_term = 'Linux'
-                elif 'windows' in os_value:
-                    os_term = 'Windows'
-                else:
-                    os_term = params['os']
-
-                filters.append({
-                    'Type': 'TERM_MATCH',
-                    'Field': 'operatingSystem',
-                    'Value': os_term
-                })
-
-            # 添加其他必要的過濾器
-            filters.append({
-                'Type': 'TERM_MATCH',
-                'Field': 'productFamily',
-                'Value': 'Compute Instance'
-            })
-
-            filters.append({
-                'Type': 'TERM_MATCH',
-                'Field': 'tenancy',
-                'Value': 'Shared'
-            })
-
-            logger.info(f"最終過濾器: {json.dumps(filters)}")
-
-            # 執行API查詢
-            response = client.get_products(
-                ServiceCode='AmazonEC2',
-                Filters=filters
-            )
-
-            logger.info(f"API響應PriceList元素數量: {len(response['PriceList'])}")
-
-            # 如果沒有找到結果，嘗試使用更少的過濾器
-            if len(response['PriceList']) == 0:
-                logger.info("未找到結果，嘗試使用更少的過濾器")
-                # 重新構建基本過濾器
-                basic_filters = []
-
-                # 只保留實例類型和地區過濾器
-                if 'instance_type' in params:
-                    basic_filters.append({
-                        'Type': 'TERM_MATCH',
-                        'Field': 'instanceType',
-                        'Value': params['instance_type']
-                    })
-
-                if 'region' in params:
-                    if params['region'].lower() == '東京' or '東京' in params['region'].lower():
-                        region_code = 'ap-northeast-1'
-                    else:
-                        region_code = params['region']
-
-                    # 嘗試不同的區域名稱格式
-                    region_names = [
-                        f"Asia Pacific ({region_code.split('-')[2].capitalize()})",
-                        region_code,
-                        f"AP {region_code.split('-')[2].upper()}"
-                    ]
-
-                    for region_name in region_names:
-                        logger.info(f"嘗試使用區域名稱: {region_name}")
-                        test_filters = basic_filters.copy()
-                        test_filters.append({
-                            'Type': 'TERM_MATCH',
-                            'Field': 'location',
-                            'Value': region_name
-                        })
-
-                        try:
-                            test_response = client.get_products(
-                                ServiceCode='AmazonEC2',
-                                Filters=test_filters
-                            )
-                            if len(test_response['PriceList']) > 0:
-                                logger.info(f"使用區域名稱 '{region_name}' 找到了結果")
-                                response = test_response
-                                break
-                        except Exception as e:
-                            logger.error(f"測試區域名稱時出錯: {str(e)}")
-
-            # 解析返回的價格數據
-            pricing_data = []
-            for product_str in response['PriceList']:
-                product = json.loads(product_str)
-
-                # 只打印前500個字符
-                logger.info(f"處理產品數據: {json.dumps(product)[:500]}...")
-
-                # 從對象中提取價格信息
-                instance_details = product['product']['attributes']
-                instance_type = instance_details.get('instanceType', 'N/A')
-                os = instance_details.get('operatingSystem', 'N/A')
-                region = instance_details.get('location', 'N/A')
-
-                # 提取價格
-                on_demand_price = None
-                try:
-                    terms = product.get('terms', {}).get('OnDemand', {})
-                    if terms:
-                        price_dimensions = next(iter(terms.values()))[
-                            'priceDimensions']
-                        price_info = next(iter(price_dimensions.values()))
-                        on_demand_price = price_info.get(
-                            'pricePerUnit', {}).get('USD', 'N/A')
-                except Exception as e:
-                    logger.error(f"價格解析錯誤: {str(e)}")
-
-                pricing_data.append({
-                    'instanceType': instance_type,
-                    'operatingSystem': os,
-                    'region': region,
-                    'onDemandPrice': on_demand_price,
-                    'unit': 'USD per Hour'
-                })
-
-            return pricing_data
+        # 處理不同的AWS服務
+        if service == 'ec2':
+            return query_ec2_price(client, params, region_name)
+        elif service == 's3':
+            return query_s3_price(client, params, region_name)
+        elif service == 'rds':
+            return query_rds_price(client, params, region_name)
+        elif service == 'lambda':
+            return query_lambda_price(client, params, region_name)
+        elif service == 'dynamodb':
+            return query_dynamodb_price(client, params, region_name)
         else:
-            return {"error": f"目前僅支持EC2服務，您請求的是 {params.get('service', 'unknown')}"}
+            return {"error": f"目前尚未支援 {params.get('service', 'unknown')} 服務的價格查詢"}
 
     except Exception as e:
         logger.error(f"AWS價格API調用錯誤: {str(e)}")
         return {"error": str(e)}
+
+
+def query_ec2_price(client, params, region_name):
+    """查詢EC2價格"""
+    filters = []
+
+    # 添加實例類型過濾器
+    if 'instance_type' in params:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'instanceType',
+            'Value': params['instance_type']
+        })
+
+    # 添加區域過濾器
+    if region_name:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'location',
+            'Value': region_name
+        })
+        logger.info(f"使用區域過濾器: {region_name}")
+
+    # 添加操作系統過濾器
+    if 'os' in params:
+        os_value = params['os'].lower()
+        if 'linux' in os_value:
+            os_term = 'Linux'
+        elif 'windows' in os_value:
+            os_term = 'Windows'
+        else:
+            os_term = params['os']
+
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'operatingSystem',
+            'Value': os_term
+        })
+
+    # 添加其他必要的過濾器
+    filters.append({
+        'Type': 'TERM_MATCH',
+        'Field': 'productFamily',
+        'Value': 'Compute Instance'
+    })
+
+    filters.append({
+        'Type': 'TERM_MATCH',
+        'Field': 'tenancy',
+        'Value': 'Shared'
+    })
+
+    logger.info(f"EC2價格查詢過濾器: {json.dumps(filters)}")
+
+    # 執行API查詢
+    response = client.get_products(
+        ServiceCode='AmazonEC2',
+        Filters=filters
+    )
+
+    logger.info(f"API響應PriceList元素數量: {len(response['PriceList'])}")
+
+    # 如果沒有找到結果，嘗試使用更少的過濾器
+    if len(response['PriceList']) == 0:
+        logger.info("未找到結果，嘗試使用更少的過濾器")
+        # 重新構建基本過濾器
+        basic_filters = []
+
+        # 只保留實例類型和地區過濾器
+        if 'instance_type' in params:
+            basic_filters.append({
+                'Type': 'TERM_MATCH',
+                'Field': 'instanceType',
+                'Value': params['instance_type']
+            })
+
+        if region_name:
+            basic_filters.append({
+                'Type': 'TERM_MATCH',
+                'Field': 'location',
+                'Value': region_name
+            })
+
+        try:
+            response = client.get_products(
+                ServiceCode='AmazonEC2',
+                Filters=basic_filters
+            )
+        except Exception as e:
+            logger.error(f"簡化EC2查詢時出錯: {str(e)}")
+
+    # 解析返回的價格數據
+    pricing_data = []
+    for product_str in response['PriceList']:
+        product = json.loads(product_str)
+
+        # 從對象中提取價格信息
+        instance_details = product['product']['attributes']
+        instance_type = instance_details.get('instanceType', 'N/A')
+        os = instance_details.get('operatingSystem', 'N/A')
+        region = instance_details.get('location', 'N/A')
+
+        # 提取價格
+        on_demand_price = None
+        try:
+            terms = product.get('terms', {}).get('OnDemand', {})
+            if terms:
+                price_dimensions = next(iter(terms.values()))[
+                    'priceDimensions']
+                price_info = next(iter(price_dimensions.values()))
+                on_demand_price = price_info.get(
+                    'pricePerUnit', {}).get('USD', 'N/A')
+        except Exception as e:
+            logger.error(f"EC2價格解析錯誤: {str(e)}")
+
+        pricing_data.append({
+            'instanceType': instance_type,
+            'operatingSystem': os,
+            'region': region,
+            'onDemandPrice': on_demand_price,
+            'unit': 'USD per Hour'
+        })
+
+    return pricing_data
+
+
+def query_s3_price(client, params, region_name):
+    """查詢S3價格"""
+    filters = []
+
+    # 添加基本過濾器
+    if region_name:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'location',
+            'Value': region_name
+        })
+
+    # 處理儲存類型 (標準/智能分層/冷藏等)
+    storage_class = "Standard"  # 默認值
+    if 'storage_class' in params:
+        s_class = params['storage_class'].lower()
+        if '標準' in s_class or 'standard' in s_class:
+            storage_class = "Standard"
+        elif '智能' in s_class or 'intelligent' in s_class:
+            storage_class = "Intelligent-Tiering"
+        elif '冷藏' in s_class or 'glacier' in s_class:
+            storage_class = "Glacier"
+        elif '深度' in s_class or 'deep' in s_class:
+            storage_class = "Glacier Deep Archive"
+        elif '單區域' in s_class or 'one zone' in s_class:
+            storage_class = "One Zone"
+        elif '標準-不頻繁' in s_class or 'infrequent' in s_class:
+            storage_class = "Standard - Infrequent Access"
+
+    filters.append({
+        'Type': 'TERM_MATCH',
+        'Field': 'storageClass',
+        'Value': storage_class
+    })
+
+    logger.info(f"S3價格查詢過濾器: {json.dumps(filters)}")
+
+    # 執行API查詢
+    response = client.get_products(
+        ServiceCode='AmazonS3',
+        Filters=filters
+    )
+
+    logger.info(f"S3 API響應PriceList元素數量: {len(response['PriceList'])}")
+
+    # 解析返回的價格數據
+    pricing_data = []
+    for product_str in response['PriceList']:
+        product = json.loads(product_str)
+
+        # 從對象中提取屬性
+        s3_details = product['product']['attributes']
+        storage_class = s3_details.get('storageClass', 'N/A')
+        volume_type = s3_details.get('volumeType', 'N/A')
+        region = s3_details.get('location', 'N/A')
+
+        # 提取價格
+        try:
+            terms = product.get('terms', {}).get('OnDemand', {})
+            if terms:
+                for term_key, term_value in terms.items():
+                    price_dimensions = term_value.get('priceDimensions', {})
+                    for dim_key, dim_value in price_dimensions.items():
+                        # 獲取價格單位和描述
+                        price = dim_value.get(
+                            'pricePerUnit', {}).get('USD', 'N/A')
+                        description = dim_value.get('description', '')
+                        unit = dim_value.get('unit', '')
+
+                        pricing_data.append({
+                            'storageClass': storage_class,
+                            'volumeType': volume_type,
+                            'region': region,
+                            'price': price,
+                            'description': description,
+                            'unit': unit
+                        })
+        except Exception as e:
+            logger.error(f"S3價格解析錯誤: {str(e)}")
+
+    # 計算特定容量的價格（如果指定了容量）
+    if 'storage_size' in params and pricing_data:
+        try:
+            size_str = params['storage_size']
+            # 提取數字和單位 (GB, TB 等)
+            import re
+            match = re.search(r'(\d+)\s*([a-zA-Z]+)?', size_str)
+            if match:
+                size = float(match.group(1))
+                unit = match.group(2).upper() if match.group(2) else 'GB'
+
+                # 轉換為GB (AWS S3定價通常以GB為單位)
+                if unit == 'TB':
+                    size *= 1024
+                elif unit == 'MB':
+                    size /= 1024
+
+                # 添加總價計算
+                for item in pricing_data:
+                    if 'GB-Month' in item.get('unit', ''):
+                        item['estimatedCost'] = float(
+                            item['price']) * size if item['price'] != 'N/A' else 'N/A'
+                        item['estimatedCostUnit'] = 'USD per Month'
+        except Exception as e:
+            logger.error(f"計算S3存儲總價時出錯: {str(e)}")
+
+    return pricing_data
+
+
+def query_rds_price(client, params, region_name):
+    """查詢RDS價格"""
+    filters = []
+
+    # 添加基本過濾器
+    if region_name:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'location',
+            'Value': region_name
+        })
+
+    # 處理數據庫引擎
+    if 'db_engine' in params:
+        engine = params['db_engine'].lower()
+        db_engine = "MySQL"  # 默認值
+
+        if 'mysql' in engine:
+            db_engine = "MySQL"
+        elif 'postgresql' in engine or 'postgres' in engine:
+            db_engine = "PostgreSQL"
+        elif 'oracle' in engine:
+            db_engine = "Oracle"
+        elif 'sqlserver' in engine or 'sql server' in engine:
+            db_engine = "SQL Server"
+        elif 'aurora' in engine:
+            db_engine = "Aurora "
+            if 'mysql' in engine:
+                db_engine += "MySQL"
+            elif 'postgresql' in engine:
+                db_engine += "PostgreSQL"
+        elif 'mariadb' in engine:
+            db_engine = "MariaDB"
+
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'databaseEngine',
+            'Value': db_engine
+        })
+
+    # 處理實例類型
+    if 'instance_type' in params:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'instanceType',
+            'Value': params['instance_type']
+        })
+
+    logger.info(f"RDS價格查詢過濾器: {json.dumps(filters)}")
+
+    # 執行API查詢
+    response = client.get_products(
+        ServiceCode='AmazonRDS',
+        Filters=filters
+    )
+
+    logger.info(f"RDS API響應PriceList元素數量: {len(response['PriceList'])}")
+
+    # 解析返回的價格數據
+    pricing_data = []
+    for product_str in response['PriceList']:
+        product = json.loads(product_str)
+
+        # 從對象中提取屬性
+        rds_details = product['product']['attributes']
+        db_engine = rds_details.get('databaseEngine', 'N/A')
+        instance_type = rds_details.get('instanceType', 'N/A')
+        deployment_option = rds_details.get('deploymentOption', 'N/A')
+        region = rds_details.get('location', 'N/A')
+
+        # 提取價格
+        try:
+            terms = product.get('terms', {}).get('OnDemand', {})
+            if terms:
+                for term_key, term_value in terms.items():
+                    price_dimensions = term_value.get('priceDimensions', {})
+                    for dim_key, dim_value in price_dimensions.items():
+                        price = dim_value.get(
+                            'pricePerUnit', {}).get('USD', 'N/A')
+                        description = dim_value.get('description', '')
+                        unit = dim_value.get('unit', '')
+
+                        pricing_data.append({
+                            'databaseEngine': db_engine,
+                            'instanceType': instance_type,
+                            'deploymentOption': deployment_option,
+                            'region': region,
+                            'price': price,
+                            'description': description,
+                            'unit': unit
+                        })
+        except Exception as e:
+            logger.error(f"RDS價格解析錯誤: {str(e)}")
+
+    return pricing_data
+
+
+def query_lambda_price(client, params, region_name):
+    """查詢Lambda價格"""
+    filters = []
+
+    # 添加基本過濾器
+    if region_name:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'location',
+            'Value': region_name
+        })
+
+    logger.info(f"Lambda價格查詢過濾器: {json.dumps(filters)}")
+
+    # 執行API查詢
+    response = client.get_products(
+        ServiceCode='AWSLambda',
+        Filters=filters
+    )
+
+    logger.info(f"Lambda API響應PriceList元素數量: {len(response['PriceList'])}")
+
+    # 解析返回的價格數據
+    pricing_data = []
+    for product_str in response['PriceList']:
+        product = json.loads(product_str)
+
+        # 從對象中提取屬性
+        lambda_details = product['product']['attributes']
+        region = lambda_details.get('location', 'N/A')
+        group = lambda_details.get('group', 'N/A')
+
+        # 提取價格
+        try:
+            terms = product.get('terms', {}).get('OnDemand', {})
+            if terms:
+                for term_key, term_value in terms.items():
+                    price_dimensions = term_value.get('priceDimensions', {})
+                    for dim_key, dim_value in price_dimensions.items():
+                        price = dim_value.get(
+                            'pricePerUnit', {}).get('USD', 'N/A')
+                        description = dim_value.get('description', '')
+                        unit = dim_value.get('unit', '')
+
+                        pricing_data.append({
+                            'group': group,
+                            'region': region,
+                            'price': price,
+                            'description': description,
+                            'unit': unit
+                        })
+        except Exception as e:
+            logger.error(f"Lambda價格解析錯誤: {str(e)}")
+
+    return pricing_data
+
+
+def query_dynamodb_price(client, params, region_name):
+    """查詢DynamoDB價格"""
+    filters = []
+
+    # 添加基本過濾器
+    if region_name:
+        filters.append({
+            'Type': 'TERM_MATCH',
+            'Field': 'location',
+            'Value': region_name
+        })
+
+    logger.info(f"DynamoDB價格查詢過濾器: {json.dumps(filters)}")
+
+    # 執行API查詢
+    response = client.get_products(
+        ServiceCode='AmazonDynamoDB',
+        Filters=filters
+    )
+
+    logger.info(f"DynamoDB API響應PriceList元素數量: {len(response['PriceList'])}")
+
+    # 解析返回的價格數據
+    pricing_data = []
+    for product_str in response['PriceList']:
+        product = json.loads(product_str)
+
+        # 從對象中提取屬性
+        dynamodb_details = product['product']['attributes']
+        region = dynamodb_details.get('location', 'N/A')
+        group = dynamodb_details.get('group', 'N/A')
+
+        # 提取價格
+        try:
+            terms = product.get('terms', {}).get('OnDemand', {})
+            if terms:
+                for term_key, term_value in terms.items():
+                    price_dimensions = term_value.get('priceDimensions', {})
+                    for dim_key, dim_value in price_dimensions.items():
+                        price = dim_value.get(
+                            'pricePerUnit', {}).get('USD', 'N/A')
+                        description = dim_value.get('description', '')
+                        unit = dim_value.get('unit', '')
+
+                        pricing_data.append({
+                            'group': group,
+                            'region': region,
+                            'price': price,
+                            'description': description,
+                            'unit': unit
+                        })
+        except Exception as e:
+            logger.error(f"DynamoDB價格解析錯誤: {str(e)}")
+
+    return pricing_data
 
 
 def generate_response_with_openai(query, pricing_data):
