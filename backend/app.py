@@ -6,7 +6,7 @@ from openai import OpenAI
 import boto3
 import json
 import logging
-test
+
 # 加載環境變量
 load_dotenv()
 
