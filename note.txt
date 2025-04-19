@@ -1,3 +1,10 @@
 要完全啟動應用，您需要：
 啟動後端服務：cd backend && python app.py
 啟動前端服務：cd frontend && npm start
+
+lsof -i :3000
+kill -9 <PID>
+
+
+
+

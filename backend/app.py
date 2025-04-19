@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai
 import boto3
 import json
 import logging
@@ -18,11 +18,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)  # 允許跨域請求
 
-# 初始化OpenAI客戶端
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url="https://api.openai.com/v1"  # 使用默認API端點
-)
+# 設置API密鑰
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 def create_aws_client():
@@ -41,48 +38,44 @@ def extract_parameters_with_openai(query):
 
     try:
         # 使用OpenAI函數調用功能提取參數
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=[
                 {"role": "system", "content": "你是一個專門解析AWS價格查詢的助手。提取關鍵參數如服務類型、地區、實例類型等。"},
                 {"role": "user", "content": query}
             ],
-            tools=[{
-                "type": "function",
-                "function": {
-                    "name": "get_aws_price",
-                    "description": "獲取AWS服務的價格信息",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "service": {
-                                "type": "string",
-                                "description": "AWS服務類型，如EC2、S3、RDS等"
-                            },
-                            "region": {
-                                "type": "string",
-                                "description": "AWS區域，如us-east-1、ap-northeast-1(東京)等"
-                            },
-                            "instance_type": {
-                                "type": "string",
-                                "description": "實例類型，如t2.micro、m5.large等"
-                            },
-                            "os": {
-                                "type": "string",
-                                "description": "操作系統，如Linux、Windows等"
-                            }
+            functions=[{
+                "name": "get_aws_price",
+                "description": "獲取AWS服務的價格信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "service": {
+                            "type": "string",
+                            "description": "AWS服務類型，如EC2、S3、RDS等"
                         },
-                        "required": ["service"]
-                    }
+                        "region": {
+                            "type": "string",
+                            "description": "AWS區域，如us-east-1、ap-northeast-1(東京)等"
+                        },
+                        "instance_type": {
+                            "type": "string",
+                            "description": "實例類型，如t2.micro、m5.large等"
+                        },
+                        "os": {
+                            "type": "string",
+                            "description": "操作系統，如Linux、Windows等"
+                        }
+                    },
+                    "required": ["service"]
                 }
             }],
-            tool_choice={"type": "function",
-                         "function": {"name": "get_aws_price"}}
+            function_call={"name": "get_aws_price"}
         )
 
         # 從回應中提取函數參數
-        tool_call = response.choices[0].message.tool_calls[0]
-        function_args = json.loads(tool_call.function.arguments)
+        function_args = json.loads(
+            response.choices[0].message.function_call.arguments)
         return function_args
 
     except Exception as e:
@@ -212,7 +205,7 @@ def generate_response_with_openai(query, pricing_data):
 
         # 使用OpenAI生成人性化回應
         pricing_str = json.dumps(pricing_data, ensure_ascii=False)
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "你是一個AWS成本專家，提供準確的價格信息和建議。"},
@@ -259,4 +252,5 @@ def process_query():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+    port = int(os.getenv('BACKEND_PORT', 3001))
+    app.run(debug=True, host='0.0.0.0', port=port)
