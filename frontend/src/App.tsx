@@ -9,7 +9,8 @@ import {
   CircularProgress,
   Card,
   CardContent,
-  Divider
+  Divider,
+  Alert
 } from '@mui/material';
 import axios from 'axios';
 import './App.css';
@@ -61,6 +62,11 @@ function App() {
     try {
       const response = await axios.post(`${API_BASE_URL}/api/query`, { query });
       setResult(response.data);
+      
+      // 檢查是否有價格數據
+      if (response.data.pricing_data && response.data.pricing_data.length === 0) {
+        setError('沒有找到符合條件的價格數據。AWS可能沒有提供該地區或配置的價格信息，或者您的查詢參數需要調整。');
+      }
     } catch (err) {
       if (axios.isAxiosError(err) && err.response) {
         setError(`錯誤: ${err.response.data.error || '未知錯誤'}`);
@@ -123,9 +129,9 @@ function App() {
         </Box>
         
         {error && (
-          <Paper sx={{ p: 3, mb: 3, backgroundColor: '#ffebee' }}>
-            <Typography color="error">{error}</Typography>
-          </Paper>
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            {error}
+          </Alert>
         )}
         
         {result && (
@@ -159,6 +165,12 @@ function App() {
                     </pre>
                   </Box>
                 </>
+              )}
+              
+              {result.pricing_data && result.pricing_data.length === 0 && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  沒有找到符合條件的價格數據。這可能是因為AWS沒有提供該配置的價格信息，或者參數組合不正確。
+                </Alert>
               )}
             </CardContent>
           </Card>

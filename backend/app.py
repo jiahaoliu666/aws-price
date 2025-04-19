@@ -110,11 +110,18 @@ def query_aws_price(params):
                 else:
                     region_code = params['region']
 
+                # 轉換區域代碼為AWS Price List API使用的位置名稱
+                region_mapping = {
+                    'ap-northeast-1': 'Asia Pacific (Tokyo)',
+                }
+                region_name = region_mapping.get(region_code, region_code)
+
                 filters.append({
                     'Type': 'TERM_MATCH',
                     'Field': 'location',
-                    'Value': region_code
+                    'Value': region_name
                 })
+                logger.info(f"使用區域過濾器: {region_name}")
 
             # 添加操作系統過濾器
             if 'os' in params:
@@ -145,16 +152,71 @@ def query_aws_price(params):
                 'Value': 'Shared'
             })
 
+            logger.info(f"最終過濾器: {json.dumps(filters)}")
+
             # 執行API查詢
             response = client.get_products(
                 ServiceCode='AmazonEC2',
                 Filters=filters
             )
 
+            logger.info(f"API響應PriceList元素數量: {len(response['PriceList'])}")
+
+            # 如果沒有找到結果，嘗試使用更少的過濾器
+            if len(response['PriceList']) == 0:
+                logger.info("未找到結果，嘗試使用更少的過濾器")
+                # 重新構建基本過濾器
+                basic_filters = []
+
+                # 只保留實例類型和地區過濾器
+                if 'instance_type' in params:
+                    basic_filters.append({
+                        'Type': 'TERM_MATCH',
+                        'Field': 'instanceType',
+                        'Value': params['instance_type']
+                    })
+
+                if 'region' in params:
+                    if params['region'].lower() == '東京' or '東京' in params['region'].lower():
+                        region_code = 'ap-northeast-1'
+                    else:
+                        region_code = params['region']
+
+                    # 嘗試不同的區域名稱格式
+                    region_names = [
+                        f"Asia Pacific ({region_code.split('-')[2].capitalize()})",
+                        region_code,
+                        f"AP {region_code.split('-')[2].upper()}"
+                    ]
+
+                    for region_name in region_names:
+                        logger.info(f"嘗試使用區域名稱: {region_name}")
+                        test_filters = basic_filters.copy()
+                        test_filters.append({
+                            'Type': 'TERM_MATCH',
+                            'Field': 'location',
+                            'Value': region_name
+                        })
+
+                        try:
+                            test_response = client.get_products(
+                                ServiceCode='AmazonEC2',
+                                Filters=test_filters
+                            )
+                            if len(test_response['PriceList']) > 0:
+                                logger.info(f"使用區域名稱 '{region_name}' 找到了結果")
+                                response = test_response
+                                break
+                        except Exception as e:
+                            logger.error(f"測試區域名稱時出錯: {str(e)}")
+
             # 解析返回的價格數據
             pricing_data = []
             for product_str in response['PriceList']:
                 product = json.loads(product_str)
+
+                # 只打印前500個字符
+                logger.info(f"處理產品數據: {json.dumps(product)[:500]}...")
 
                 # 從對象中提取價格信息
                 instance_details = product['product']['attributes']
